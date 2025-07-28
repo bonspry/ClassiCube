@@ -2,6 +2,7 @@
 #include <sifrpc.h>
 #include <loadfile.h>
 #include <libsd.h>
+#include <libsd-common.h> // EXPLICITLY INCLUDE for older SDKs
 #include <malloc.h>
 
 #include "../Audio.h"
@@ -22,7 +23,7 @@ static struct AudioContext* active_contexts[AUDIO_MAX_CONTEXTS];
 // Forward declarations
 static int AllocVoice(void);
 static void FreeVoice(int idx);
-static cc_result Audio_Update(struct AudioContext* ctx);
+static void Audio_Update(struct AudioContext* ctx);
 
 
 struct AudioBuffer {
@@ -106,7 +107,7 @@ void Audio_Close(struct AudioContext* ctx) {
 	if (!ctx || ctx->voice_idx == -1) return;
 
 	int idx = ctx->voice_idx;
-	active_contexts[idx] = NULL; // Deregister first
+	active_contexts[idx] = NULL;
 	
 	sceSdVoiceTransStatus(SPU_DMA_CHANNEL, SD_TRANS_STATUS_STOP);
 	sceSdSetSwitch(ctx->voice_handle, SD_SWITCH_KOFF);
@@ -116,7 +117,7 @@ void Audio_Close(struct AudioContext* ctx) {
 	}
 	FreeVoice(idx);
 	
-	ctx->voice_idx = -1; // Invalidate context
+	ctx->voice_idx = -1;
 }
 
 cc_result Audio_SetFormat(struct AudioContext* ctx, int channels, int sampleRate, int playbackRate) {
@@ -127,11 +128,10 @@ cc_result Audio_SetFormat(struct AudioContext* ctx, int channels, int sampleRate
 	ctx->sampleRate = sampleRate;
 
 	u16 pitch = (u16)(((float)sampleRate / 48000.0f) * (float)SPU_PITCH_BASE);
-	if (sceSdSetParam(ctx->voice_handle | SD_VPARAM_PITCH, pitch) < 0) return ERR_INVALID_ARGUMENT;
+	sceSdSetParam(ctx->voice_handle | SD_VPARAM_PITCH, pitch);
 	return 0;
 }
 
-// NOTE: Changed to void to match the declaration in Audio.h
 void Audio_SetVolume(struct AudioContext* ctx, int volume) {
 	if (!ctx || ctx->voice_idx == -1) return;
 	u8 spu_vol = (volume * SPU_VOLUME_MAX) / 255;
@@ -180,8 +180,8 @@ cc_result Audio_Poll(struct AudioContext* ctx, int* inUse) {
 	return 0;
 }
 
-static cc_result Audio_Update(struct AudioContext* ctx) {
-	if (!ctx->playing || ctx->voice_idx == -1) return 0;
+static void Audio_Update(struct AudioContext* ctx) {
+	if (!ctx->playing || ctx->voice_idx == -1) return;
 
 	if (ctx->playing_buf_idx == -1 || (sceSdGetSwitch(ctx->voice_handle) & SD_SWITCH_ENDX)) {
 		if (ctx->playing_buf_idx != -1) {
@@ -192,25 +192,21 @@ static cc_result Audio_Update(struct AudioContext* ctx) {
 		struct AudioBuffer* next_buf = &ctx->bufs[ctx->bufHead];
 		if (next_buf->available) {
 			ctx->playing = false;
-			return 0;
+			return;
 		}
 
 		FlushCache(0);
 
-		// NOTE: Pass the ADDRESS of spu_addr
-		if (sceSdVoiceTrans(SPU_DMA_CHANNEL, SD_TRANS_WRITE | SD_TRANS_MODE_DMA, 
-		                    next_buf->samples, &ctx->spu_addr, next_buf->bytesLeft) < 0) {
-			return ERR_INVALID_ARGUMENT;
-		}
+		sceSdVoiceTrans(SPU_DMA_CHANNEL, SD_TRANS_WRITE | SD_TRANS_MODE_DMA, 
+		                next_buf->samples, &ctx->spu_addr, next_buf->bytesLeft);
 		sceSdVoiceTransStatus(SPU_DMA_CHANNEL, SD_TRANS_STATUS_WAIT);
 
-		if (sceSdSetParam(ctx->voice_handle | SD_VPARAM_ADDR, ctx->spu_addr) < 0) return ERR_INVALID_ARGUMENT;
-		if (sceSdSetSwitch(ctx->voice_handle, SD_SWITCH_KON) < 0) return ERR_INVALID_ARGUMENT;
+		sceSdSetParam(ctx->voice_handle | SD_VPARAM_ADDR, ctx->spu_addr);
+		sceSdSetSwitch(ctx->voice_handle, SD_SWITCH_KON);
 
 		ctx->playing_buf_idx = ctx->bufHead;
 		ctx->bufHead = (ctx->bufHead + 1) % ctx->count;
 	}
-	return 0;
 }
 
 /*########################################################################################################################*
@@ -223,7 +219,7 @@ cc_result StreamContext_Play(struct AudioContext* ctx) { return Audio_Play(ctx);
 cc_result StreamContext_Pause(struct AudioContext* ctx) {
 	if (!ctx || ctx->voice_idx == -1) return ERR_INVALID_ARGUMENT;
 	ctx->playing = false;
-	if (sceSdSetSwitch(ctx->voice_handle, SD_SWITCH_KOFF) < 0) return ERR_INVALID_ARGUMENT;
+	sceSdSetSwitch(ctx->voice_handle, SD_SWITCH_KOFF);
 	return 0;
 }
 
@@ -286,7 +282,6 @@ static int AllocVoice(void) {
 			break;
 		}
 	}
-	// NOTE: Use CpuEnableIntr to restore state in newer SDKs
 	CpuEnableIntr(state);
 	return voice_idx;
 }
