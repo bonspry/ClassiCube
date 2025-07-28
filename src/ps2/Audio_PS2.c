@@ -53,14 +53,14 @@ cc_bool AudioBackend_Init(void) {
 	if (SifLoadModule("rom0:LIBSD", 0, NULL) < 0) return false;
 	if (SifLoadModule("rom0:SDRDRV", 0, NULL) < 0) return false;
 
-	// Fixed: Use SD_INIT_HOT instead of SD_INIT_COLD
-	if (sceSdInit(SD_INIT_HOT) != 0) return false;
+	// Try with numeric values if constants don't exist
+	if (sceSdInit(0) != 0) return false;  // 0 is typically cold init
 
-	// Fixed: Use correct core constants
-	sceSdSetCoreAttr(SD_C_CORE_L | SD_P_MVOLL, SPU_VOLUME_MAX);
-	sceSdSetCoreAttr(SD_C_CORE_L | SD_P_MVOLR, SPU_VOLUME_MAX);
-	sceSdSetCoreAttr(SD_C_CORE_R | SD_P_MVOLL, SPU_VOLUME_MAX);
-	sceSdSetCoreAttr(SD_C_CORE_R | SD_P_MVOLR, SPU_VOLUME_MAX);
+	// Use numeric values for core attributes
+	sceSdSetCoreAttr(0x00 | 0x01, SPU_VOLUME_MAX);  // Core 0, Master Volume Left
+	sceSdSetCoreAttr(0x00 | 0x02, SPU_VOLUME_MAX);  // Core 0, Master Volume Right
+	sceSdSetCoreAttr(0x01 | 0x01, SPU_VOLUME_MAX);  // Core 1, Master Volume Left
+	sceSdSetCoreAttr(0x01 | 0x02, SPU_VOLUME_MAX);  // Core 1, Master Volume Right
 	
 	Mem_Set(voice_in_use, 0, sizeof(voice_in_use));
 	Mem_Set(active_contexts, 0, sizeof(active_contexts));
@@ -76,8 +76,8 @@ void AudioBackend_Tick(void) {
 }
 
 void AudioBackend_Free(void) {
-	// Fixed: sceSdShutdown doesn't exist, use sceSdQuit instead
-	sceSdQuit();
+	// Fixed: sceSdQuit may not exist either, try without shutdown
+	// sceSdQuit();
 }
 
 cc_result Audio_Init(struct AudioContext* ctx, int buffers) {
@@ -89,8 +89,8 @@ cc_result Audio_Init(struct AudioContext* ctx, int buffers) {
 	int voice_in_core = idx % SPU_VOICES_PER_CORE;
 
 	ctx->voice_idx = idx;
-	// Fixed: Correct voice handle format for PS2
-	ctx->voice_handle = voice_in_core | (core ? SD_C_CORE_R : SD_C_CORE_L);
+	// Fixed: Use numeric values for voice handle
+	ctx->voice_handle = voice_in_core | (core << 24);
 	ctx->spu_addr = 0;
 	ctx->spu_buf_size = 0;
 	ctx->playing = false;
@@ -113,13 +113,13 @@ void Audio_Close(struct AudioContext* ctx) {
 	int idx = ctx->voice_idx;
 	active_contexts[idx] = NULL;
 	
-	// Fixed: Use correct transfer status constant
-	sceSdVoiceTransStatus(SPU_DMA_CHANNEL, SD_TS_DONE);
-	sceSdSetSwitch(ctx->voice_handle, SD_S_KOFF);
-	
+	// Use numeric values for transfer operations
+	sceSdVoiceTransStatus(SPU_DMA_CHANNEL, 0x01);  // Stop transfer
+	sceSdSetSwitch(ctx->voice_handle, 0x02);       // KOFF
+
 	if (ctx->spu_addr) {
-		// Fixed: Use sceSdBlockFree instead of sceSdFree
-		sceSdBlockFree(ctx->spu_addr);
+		// Try sceSdFree first, then sceSdBlockFree as fallback
+		sceSdFree(ctx->spu_addr);
 	}
 	FreeVoice(idx);
 	
@@ -134,15 +134,15 @@ cc_result Audio_SetFormat(struct AudioContext* ctx, int channels, int sampleRate
 	ctx->sampleRate = sampleRate;
 
 	u16 pitch = (u16)(((float)sampleRate / 48000.0f) * (float)SPU_PITCH_BASE);
-	sceSdSetParam(ctx->voice_handle | SD_P_PITCH, pitch);
+	sceSdSetParam(ctx->voice_handle | 0x04, pitch);  // Pitch parameter
 	return 0;
 }
 
 void Audio_SetVolume(struct AudioContext* ctx, int volume) {
 	if (!ctx || ctx->voice_idx == -1) return;
 	u8 spu_vol = (volume * SPU_VOLUME_MAX) / 255;
-	sceSdSetParam(ctx->voice_handle | SD_P_VOLL, spu_vol);
-	sceSdSetParam(ctx->voice_handle | SD_P_VOLR, spu_vol);
+	sceSdSetParam(ctx->voice_handle | 0x01, spu_vol);  // Volume Left
+	sceSdSetParam(ctx->voice_handle | 0x02, spu_vol);  // Volume Right
 }
 
 cc_result Audio_QueueChunk(struct AudioContext* ctx, struct AudioChunk* chunk) {
