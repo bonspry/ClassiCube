@@ -1,8 +1,8 @@
 #include <kernel.h>
 #include <sifrpc.h>
 #include <loadfile.h>
+#include <libsd-common.h>
 #include <libsd.h>
-#include <libsd-common.h> // EXPLICITLY INCLUDE for older SDKs
 #include <malloc.h>
 
 #include "../Audio.h"
