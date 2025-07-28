@@ -77,7 +77,7 @@ void AudioBackend_Free(void) {
 }
 
 cc_result Audio_Init(struct AudioContext* ctx, int buffers) {
-	if (!ctx) return ERR_NULL_POINTER;
+	if (!ctx) return ERR_INVALID_ARGUMENT; // Use existing error code
 	int idx = AllocVoice();
 	if (idx == -1) return ERR_NOT_SUPPORTED;
 
@@ -127,15 +127,15 @@ cc_result Audio_SetFormat(struct AudioContext* ctx, int channels, int sampleRate
 	ctx->sampleRate = sampleRate;
 
 	u16 pitch = (u16)(((float)sampleRate / 48000.0f) * (float)SPU_PITCH_BASE);
-	if (sceSdSetParam(ctx->voice_handle | SD_VP_PITCH, pitch) < 0) return ERR_INVALID_STATE;
+	if (sceSdSetParam(ctx->voice_handle | SD_VP_PITCH, pitch) < 0) return ERR_INVALID_ARGUMENT;
 	return 0;
 }
 
 cc_result Audio_SetVolume(struct AudioContext* ctx, int volume) {
 	if (!ctx || ctx->voice_idx == -1) return ERR_INVALID_ARGUMENT;
 	u8 spu_vol = (volume * SPU_VOLUME_MAX) / 255;
-	if (sceSdSetParam(ctx->voice_handle | SD_VP_VOLL, spu_vol) < 0) return ERR_INVALID_STATE;
-	if (sceSdSetParam(ctx->voice_handle | SD_VP_VOLR, spu_vol) < 0) return ERR_INVALID_STATE;
+	if (sceSdSetParam(ctx->voice_handle | SD_VP_VOLL, spu_vol) < 0) return ERR_INVALID_ARGUMENT;
+	if (sceSdSetParam(ctx->voice_handle | SD_VP_VOLR, spu_vol) < 0) return ERR_INVALID_ARGUMENT;
 	return 0;
 }
 
@@ -171,7 +171,7 @@ cc_result Audio_Play(struct AudioContext* ctx) {
 }
 
 cc_result Audio_Poll(struct AudioContext* ctx, int* inUse) {
-	if (!ctx) return ERR_NULL_POINTER;
+	if (!ctx) return ERR_INVALID_ARGUMENT; // Use existing error code
 	int count = 0;
 	for (int i = 0; i < ctx->count; i++) {
 		if (!ctx->bufs[i].available) count++;
@@ -199,12 +199,12 @@ static cc_result Audio_Update(struct AudioContext* ctx) {
 
 		if (sceSdVoiceTrans(SPU_DMA_CHANNEL, SD_TRANS_WRITE | SD_TRANS_MODE_DMA, 
 		                    next_buf->samples, ctx->spu_addr, next_buf->bytesLeft) < 0) {
-			return ERR_INVALID_STATE;
+			return ERR_INVALID_ARGUMENT;
 		}
 		sceSdVoiceTransStatus(SPU_DMA_CHANNEL, SD_TRANS_STATUS_WAIT);
 
-		if (sceSdSetParam(ctx->voice_handle | SD_VP_ADDR, ctx->spu_addr) < 0) return ERR_INVALID_STATE;
-		if (sceSdSetSwitch(ctx->voice_handle, SD_S_KON) < 0) return ERR_INVALID_STATE;
+		if (sceSdSetParam(ctx->voice_handle | SD_VP_ADDR, ctx->spu_addr) < 0) return ERR_INVALID_ARGUMENT;
+		if (sceSdSetSwitch(ctx->voice_handle, SD_S_KON) < 0) return ERR_INVALID_ARGUMENT;
 
 		ctx->playing_buf_idx = ctx->bufHead;
 		ctx->bufHead = (ctx->bufHead + 1) % ctx->count;
@@ -222,7 +222,7 @@ cc_result StreamContext_Play(struct AudioContext* ctx) { return Audio_Play(ctx);
 cc_result StreamContext_Pause(struct AudioContext* ctx) {
 	if (!ctx || ctx->voice_idx == -1) return ERR_INVALID_ARGUMENT;
 	ctx->playing = false;
-	if (sceSdSetSwitch(ctx->voice_handle, SD_S_KOFF) < 0) return ERR_INVALID_STATE;
+	if (sceSdSetSwitch(ctx->voice_handle, SD_S_KOFF) < 0) return ERR_INVALID_ARGUMENT;
 	return 0;
 }
 
@@ -231,7 +231,6 @@ cc_result StreamContext_Update(struct AudioContext* ctx, int* inUse) { return Au
 /*########################################################################################################################*
 *------------------------------------------------------Sound context------------------------------------------------------*
 *#########################################################################################################################*/
-// Sound context functions remain the same, they just call the base functions which now have better error checking.
 cc_bool SoundContext_FastPlay(struct AudioContext* ctx, struct AudioData* data) { return true; }
 cc_result SoundContext_PlayData(struct AudioContext* ctx, struct AudioData* data) {
     cc_result res;
@@ -241,7 +240,7 @@ cc_result SoundContext_PlayData(struct AudioContext* ctx, struct AudioData* data
 	return 0;
 }
 cc_result SoundContext_PollBusy(struct AudioContext* ctx, cc_bool* isBusy) {
-	if (!ctx) return ERR_NULL_POINTER;
+	if (!ctx) return ERR_INVALID_ARGUMENT; // Use existing error code
 	int inUse = 0;
 	cc_result res = Audio_Poll(ctx, &inUse);
 	if (res) return res;
@@ -275,20 +274,20 @@ void Audio_FreeChunks(struct AudioChunk* chunks, int numChunks) {
 *----------------------------------------------------PS2 specific helpers-------------------------------------------------*
 *#########################################################################################################################*/
 static int AllocVoice(void) {
-	int i, state;
+	int state;
 	int voice_idx = -1;
 
-	// This is a critical section as it modifies the global voice_in_use array.
-	// Disable interrupts to prevent race conditions from other threads or handlers.
+	// Disable interrupts to make this section atomic.
 	state = DI();
-	for (i = 0; i < AUDIO_MAX_CONTEXTS; i++) { // Corrected loop boundary
+	for (int i = 0; i < AUDIO_MAX_CONTEXTS; i++) {
 		if (!voice_in_use[i]) {
 			voice_in_use[i] = true;
 			voice_idx = i;
 			break;
 		}
 	}
-	EI(state);
+	// Restore the previous interrupt state using the correct function.
+	EnableIntr(state);
 	return voice_idx;
 }
 
@@ -296,8 +295,7 @@ static void FreeVoice(int idx) {
 	if (idx < 0 || idx >= AUDIO_MAX_CONTEXTS) return;
 	int state;
 
-	// This is a critical section.
 	state = DI();
 	voice_in_use[idx] = false;
-	EI(state);
+	EnableIntr(state);
 }
